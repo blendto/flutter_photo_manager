@@ -3,9 +3,6 @@
 // in the LICENSE file.
 
 import 'dart:async';
-import 'dart:io';
-import 'dart:typed_data' as typed_data;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -14,8 +11,6 @@ import '../types/entity.dart';
 import '../types/thumbnail.dart';
 import 'constants.dart';
 import 'enums.dart';
-
-final _providerLocks = <AssetEntityImageProvider, Completer<ui.Codec>>{};
 
 /// The [ImageProvider] that handles [AssetEntity].
 ///
@@ -66,108 +61,8 @@ class AssetEntityImageProvider extends ImageProvider<AssetEntityImageProvider> {
   ImageFileType get imageFileType => _getType();
 
   @override
-  ImageStreamCompleter load(
-    AssetEntityImageProvider key,
-    DecoderCallback decode, // ignore: deprecated_member_use
-  ) {
-    return MultiFrameImageStreamCompleter(
-      codec: _loadAsync(key, decode),
-      scale: 1.0,
-      debugLabel: '${key.entity.runtimeType}-'
-          '${key.entity.id}-'
-          '${isOriginal ? 'origin-' : ''}'
-          '${isOriginal ? '' : '$thumbnailFormat'}',
-      informationCollector: () {
-        return <DiagnosticsNode>[
-          DiagnosticsProperty<ImageProvider>('Image provider', this),
-          DiagnosticsProperty<AssetEntityImageProvider>('Image key', key),
-        ];
-      },
-    );
-  }
-
-  @override
   Future<AssetEntityImageProvider> obtainKey(ImageConfiguration configuration) {
     return SynchronousFuture<AssetEntityImageProvider>(this);
-  }
-
-  Future<ui.Codec> _loadAsync(
-    AssetEntityImageProvider key,
-    DecoderCallback decode, // ignore: deprecated_member_use
-  ) {
-    if (_providerLocks.containsKey(key)) {
-      return _providerLocks[key]!.future;
-    }
-    final lock = Completer<ui.Codec>();
-    _providerLocks[key] = lock;
-    Future(() async {
-      try {
-        assert(key == this);
-        if (key.entity.type == AssetType.audio ||
-            key.entity.type == AssetType.other) {
-          throw UnsupportedError(
-            'Image data for the ${key.entity.type} is not supported.',
-          );
-        }
-
-        // Define the image type.
-        final ImageFileType type;
-        if (key.imageFileType == ImageFileType.other) {
-          // Assume the title is invalid here, try again with the async getter.
-          type = _getType(await key.entity.titleAsync);
-        } else {
-          type = key.imageFileType;
-        }
-
-        typed_data.Uint8List? data;
-        if (isOriginal) {
-          if (key.entity.type == AssetType.video) {
-            data = await key.entity.thumbnailData;
-          } else if (type == ImageFileType.heic) {
-            data = await (await key.entity.file)?.readAsBytes();
-          } else {
-            data = await key.entity.originBytes;
-          }
-        } else {
-          data = await key.entity.thumbnailDataWithOption(
-            _thumbOption(thumbnailSize!),
-          );
-        }
-        if (data == null) {
-          throw StateError('The data of the entity is null: $entity');
-        }
-        return decode(data);
-      } catch (e, s) {
-        if (kDebugMode) {
-          FlutterError.presentError(
-            FlutterErrorDetails(
-              exception: e,
-              stack: s,
-              library: PMConstants.libraryName,
-            ),
-          );
-        }
-        // Depending on where the exception was thrown, the image cache may not
-        // have had a chance to track the key in the cache at all.
-        // Schedule a microtask to give the cache a chance to add the key.
-        Future<void>.microtask(() => _evictCache(key));
-        rethrow;
-      }
-    }).then((codec) {
-      lock.complete(codec);
-    }).catchError((e, s) {
-      lock.completeError(e, s);
-    }).whenComplete(() {
-      _providerLocks.remove(key);
-    });
-    return lock.future;
-  }
-
-  ThumbnailOption _thumbOption(ThumbnailSize size) {
-    if (Platform.isIOS || Platform.isMacOS) {
-      return ThumbnailOption.ios(size: size, format: thumbnailFormat);
-    }
-    return ThumbnailOption(size: size, format: thumbnailFormat);
   }
 
   /// Get image type by reading the file extension.
@@ -205,12 +100,6 @@ class AssetEntityImageProvider extends ImageProvider<AssetEntityImageProvider> {
       }
     }
     return type ?? ImageFileType.other;
-  }
-
-  static void _evictCache(AssetEntityImageProvider key) {
-    // ignore: unnecessary_cast
-    ((PaintingBinding.instance as PaintingBinding).imageCache as ImageCache)
-        .evict(key);
   }
 
   @override
